@@ -14,7 +14,7 @@ public final class LauncherConfig {
     // =========================================================================
     // 1) معلومات التطبيق وهويته
     // =========================================================================
-    public static final String APP_VERSION = "1.0.0";
+    public static final String APP_VERSION = "1.0.1";
     public static final String APP_TITLE = "Dragon Ball Legends — التعريب العربي";
     public static final String APP_SUBTITLE = "مثبّت ذكي مع نسخ احتياطي واستعادة أصلية (Shizuku & SAF)";
     public static final String BADGE_LABEL = "مشروع تعريب DBL";

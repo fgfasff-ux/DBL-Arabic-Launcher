@@ -110,14 +110,35 @@ public class MainActivity extends Activity {
     private Button btnRestore;
     private Button btnCommunity;
 
+    private final Shizuku.OnBinderReceivedListener shizukuBinderReceivedListener = () -> {
+        mainHandler.post(() -> {
+            if (!isBusy) {
+                refreshStatusAsync(this::resumePendingActionIfReady);
+            }
+        });
+    };
+
+    private final Shizuku.OnBinderDeadListener shizukuBinderDeadListener = () -> {
+        mainHandler.post(() -> {
+            if (!isBusy) {
+                refreshStatusAsync(null);
+            }
+        });
+    };
+
     private final Shizuku.OnRequestPermissionResultListener shizukuPermListener = (requestCode, grantResult) -> {
-        if (grantResult == PackageManager.PERMISSION_GRANTED) {
+        if (requestCode == REQ_SHIZUKU_PERMISSION && grantResult == PackageManager.PERMISSION_GRANTED) {
             worker.execute(() -> {
                 startBridgeViaShizuku();
                 mainHandler.post(() -> refreshStatusAsync(this::resumePendingActionIfReady));
             });
         } else {
-            mainHandler.post(() -> refreshStatusAsync(null));
+            mainHandler.post(() -> {
+                if (requestCode == REQ_SHIZUKU_PERMISSION) {
+                    Toast.makeText(this, "تم رفض إذن Shizuku. يمكنك منحه لاحقاً من الزر بالأسفل.", Toast.LENGTH_SHORT).show();
+                }
+                refreshStatusAsync(null);
+            });
         }
     };
 
@@ -134,6 +155,8 @@ public class MainActivity extends Activity {
         loadFonts();
 
         try {
+            Shizuku.addBinderReceivedListenerSticky(shizukuBinderReceivedListener);
+            Shizuku.addBinderDeadListener(shizukuBinderDeadListener);
             Shizuku.addRequestPermissionResultListener(shizukuPermListener);
         } catch (Throwable ignored) {
         }
@@ -167,6 +190,8 @@ public class MainActivity extends Activity {
     protected void onDestroy() {
         super.onDestroy();
         try {
+            Shizuku.removeBinderReceivedListener(shizukuBinderReceivedListener);
+            Shizuku.removeBinderDeadListener(shizukuBinderDeadListener);
             Shizuku.removeRequestPermissionResultListener(shizukuPermListener);
         } catch (Throwable ignored) {
         }
@@ -831,7 +856,14 @@ public class MainActivity extends Activity {
     private void requestBestAccessInteractive() {
         try {
             if (Shizuku.pingBinder()) {
+                if (Shizuku.isPreV11()) {
+                    Toast.makeText(this, "إصدار Shizuku قديم جداً، يرجى تحديث تطبيق Shizuku.", Toast.LENGTH_LONG).show();
+                    return;
+                }
                 if (Shizuku.checkSelfPermission() != PackageManager.PERMISSION_GRANTED) {
+                    if (Shizuku.shouldShowRequestPermissionRationale()) {
+                        Toast.makeText(this, "يرجى السماح للتطبيق باستخدام Shizuku للوصول إلى ملفات اللعبة.", Toast.LENGTH_LONG).show();
+                    }
                     Shizuku.requestPermission(REQ_SHIZUKU_PERMISSION);
                     return;
                 }
