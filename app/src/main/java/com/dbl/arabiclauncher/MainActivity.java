@@ -2,6 +2,9 @@ package com.dbl.arabiclauncher;
 
 import android.app.Activity;
 import android.app.AlertDialog;
+import android.content.ClipData;
+import android.content.ClipboardManager;
+import android.content.Context;
 import android.content.Intent;
 import android.content.SharedPreferences;
 import android.content.pm.PackageInfo;
@@ -106,6 +109,7 @@ public class MainActivity extends Activity {
     private Button btnCheckUpdate;
     private Button btnInstallOnline;
     private Button btnInstallLocalZip;
+    private Button btnDiagScan;
     private Button btnLaunchGame;
     private Button btnRestore;
     private Button btnCommunity;
@@ -376,6 +380,13 @@ public class MainActivity extends Activity {
         LinearLayout.LayoutParams localLp = new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dp(46));
         localLp.bottomMargin = dp(8);
         root.addView(btnInstallLocalZip, localLp);
+
+        btnDiagScan = makeButton("فحص مسارات ونسخ ملف اللغة (Shizuku)", LauncherConfig.COL_CARD_INNER, LauncherConfig.COL_CYAN, true);
+        btnDiagScan.setTextSize(13f);
+        btnDiagScan.setOnClickListener(v -> runDiagnosticScanFlow());
+        LinearLayout.LayoutParams diagLp = new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dp(42));
+        diagLp.bottomMargin = dp(8);
+        root.addView(btnDiagScan, diagLp);
 
         btnLaunchGame = makeButton("تشغيل Dragon Ball Legends", Color.parseColor("#132F4C"), LauncherConfig.COL_TEXT, true);
         btnLaunchGame.setTextSize(14f);
@@ -1288,6 +1299,66 @@ public class MainActivity extends Activity {
         });
     }
 
+    private void runDiagnosticScanFlow() {
+        if (isBusy) {
+            return;
+        }
+        worker.execute(() -> {
+            AccessMode mode = detectAccessMode();
+            if (mode != AccessMode.BRIDGE_ACTIVE && mode != AccessMode.DIRECT_FS) {
+                mainHandler.post(() -> {
+                    Toast.makeText(this, "يلزم تفعيل Shizuku لتنفيذ الفحص العميق للمسارات والنسخ المكررة.", Toast.LENGTH_LONG).show();
+                    requestBestAccessInteractive();
+                });
+                return;
+            }
+            setBusyUi(true, "جارٍ فحص مجلدات اللعبة والبحث عن النسخ المكررة لملف اللغة وكاش UnityCache...", 40);
+            try {
+                String resp = (mode == AccessMode.BRIDGE_ACTIVE)
+                        ? sendBridgeCommand("SCAN_DIAG\t" + getHintDir().getAbsolutePath(), 30000)
+                        : ShellBridgeServer.runDiagnosticScan(getHintDir());
+                if (resp == null || !resp.startsWith("OK|")) {
+                    throw new IllegalStateException("تعذر إتمام الفحص: " + resp);
+                }
+                String report = resp.substring(3).replace("\\n", "\n");
+                updateProgress(100, "اكتمل الفحص التشخيصي لمسارات اللعبة ✓");
+                mainHandler.post(() -> showDiagnosticReportDialog(report));
+            } catch (Throwable t) {
+                showErrorState("خطأ أثناء الفحص: " + readableError(t));
+            } finally {
+                setBusyUi(false, null, -1);
+            }
+        });
+    }
+
+    private void showDiagnosticReportDialog(String report) {
+        ScrollView sv = new ScrollView(this);
+        sv.setPadding(dp(16), dp(12), dp(16), dp(12));
+        TextView tv = new TextView(this);
+        tv.setText(report);
+        tv.setTextSize(11.5f);
+        tv.setTextColor(LauncherConfig.COL_TEXT);
+        tv.setTextIsSelectable(true);
+        tv.setLayoutDirection(View.LAYOUT_DIRECTION_LTR);
+        sv.addView(tv);
+
+        AlertDialog.Builder b = new AlertDialog.Builder(this, android.R.style.Theme_DeviceDefault_Dialog_Alert);
+        b.setTitle("تقرير فحص مسارات ملف اللغة");
+        b.setView(sv);
+        b.setPositiveButton("نسخ التقرير", (d, w) -> {
+            try {
+                ClipboardManager cm = (ClipboardManager) getSystemService(Context.CLIPBOARD_SERVICE);
+                if (cm != null) {
+                    cm.setPrimaryClip(ClipData.newPlainText("DBL Diagnostic", report));
+                    Toast.makeText(this, "تم نسخ التقرير إلى الحافظة ✓", Toast.LENGTH_SHORT).show();
+                }
+            } catch (Throwable ignored) {
+            }
+        });
+        b.setNegativeButton("إغلاق", null);
+        b.show();
+    }
+
     private void showNeedsFirstLaunchDialog() {
         AlertDialog.Builder b = new AlertDialog.Builder(this, android.R.style.Theme_DeviceDefault_Dialog_Alert);
         b.setTitle("يلزم تشغيل اللعبة لمرة واحدة أولاً");
@@ -1346,6 +1417,9 @@ public class MainActivity extends Activity {
         mainHandler.post(() -> {
             btnInstallOnline.setEnabled(!busy);
             btnInstallLocalZip.setEnabled(!busy);
+            if (btnDiagScan != null) {
+                btnDiagScan.setEnabled(!busy);
+            }
             btnRestore.setEnabled(!busy);
             btnGrantAccess.setEnabled(!busy);
             btnCheckUpdate.setEnabled(!busy);

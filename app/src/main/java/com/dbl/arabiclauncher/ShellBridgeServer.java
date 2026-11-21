@@ -57,12 +57,26 @@ public class ShellBridgeServer {
         }
     }
 
+    public static final class DuplicateEntry {
+        public final String absPath;
+        public final long patchedSize;
+        public final String backupName;
+
+        public DuplicateEntry(String absPath, long patchedSize, String backupName) {
+            this.absPath = absPath;
+            this.patchedSize = patchedSize;
+            this.backupName = backupName;
+        }
+    }
+
     public static final class BackupManifest {
         public String patchVersion = "";
         public String targetSubpath = "";
         public long installedAt = 0L;
         public final List<BackupEntry> entries = new ArrayList<>();
         public final Map<String, BackupEntry> byPath = new HashMap<>();
+        public final List<DuplicateEntry> duplicates = new ArrayList<>();
+        public final Map<String, DuplicateEntry> dupByAbsPath = new HashMap<>();
     }
 
     public static void main(String[] args) {
@@ -277,6 +291,9 @@ public class ShellBridgeServer {
                             (pct, msg) -> writer.println("PROG|" + pct + "|" + msg));
                     writer.println(result);
                 }
+            } else if ("SCAN_DIAG".equals(cmd)) {
+                File hint = (parts.length > 2 && !parts[2].isEmpty()) ? new File(parts[2]) : null;
+                writer.println(runDiagnosticScan(hint));
             } else if ("STOP".equals(cmd)) {
                 writer.println("OK|BYE");
                 System.exit(0);
@@ -486,12 +503,39 @@ public class ShellBridgeServer {
                     }
                 }
 
-                // نسخ ملف التعريب الجديد بشكل ذري وآمن
+            // نسخ ملف التعريب الجديد بشكل ذري وآمن
                 copyFileAtomically(src, targetFile);
 
                 BackupEntry newEntry = new BackupEntry(relFromFiles, targetFile.length(), hadOriginal);
                 nextManifest.entries.add(newEntry);
                 nextManifest.byPath.put(relFromFiles, newEntry);
+
+                // البحث التلقائي عن أي نسخ مكررة لنفس اسم الملف في cache / UnityCache / as / streamingassetbundles / المسار الداخلي واستبدالها جميعاً
+                if (LauncherConfig.isSha1BundleFilename(src.getName())) {
+                    Set<String> exclude = new HashSet<>();
+                    try {
+                        exclude.add(targetFile.getCanonicalPath());
+                    } catch (Throwable ignored) {
+                        exclude.add(targetFile.getAbsolutePath());
+                    }
+                    File origDupsDir = new File(backupDir, "orig_dups");
+                    List<File> duplicates = findDuplicateCopies(filesDir, src.getName(), exclude);
+                    for (File dupFile : duplicates) {
+                        String dupAbs = dupFile.getAbsolutePath();
+                        DuplicateEntry prevDup = prevManifest.dupByAbsPath.get(dupAbs);
+                        String bakName = (prevDup != null && !prevDup.backupName.isEmpty())
+                                ? prevDup.backupName
+                                : ("dup_" + Math.abs(dupAbs.hashCode()) + "_" + src.getName());
+                        File dupBackup = new File(origDupsDir, bakName);
+                        if (!dupBackup.isFile()) {
+                            copyFileAtomically(dupFile, dupBackup);
+                        }
+                        copyFileAtomically(src, dupFile);
+                        DuplicateEntry nextDup = new DuplicateEntry(dupAbs, dupFile.length(), bakName);
+                        nextManifest.duplicates.add(nextDup);
+                        nextManifest.dupByAbsPath.put(dupAbs, nextDup);
+                    }
+                }
 
                 if (listener != null && (i % 2 == 0 || i == total - 1)) {
                     int pct = 64 + ((i + 1) * 32) / total;
@@ -504,7 +548,7 @@ public class ShellBridgeServer {
             }
             writeTextAtomically(manifestFile, serializeManifest(nextManifest));
 
-            return "OK|INSTALLED|" + nextManifest.patchVersion + "|" + total;
+            return "OK|INSTALLED|" + nextManifest.patchVersion + "|" + (total + nextManifest.duplicates.size());
         } catch (Throwable t) {
             return "ERR|" + t.getClass().getSimpleName() + ": " + t.getMessage();
         }
@@ -545,6 +589,17 @@ public class ShellBridgeServer {
                     if (listener != null && (i % 2 == 0 || i == manifest.entries.size() - 1)) {
                         int pct = 30 + ((i + 1) * 65) / total;
                         listener.onProgress(pct, "جارٍ استعادة الملفات الأصلية (" + (i + 1) + "/" + total + ")...");
+                    }
+                }
+
+                // استعادة أي نسخ مكررة تم استبدالها في cache أو UnityCache أو المسار الداخلي
+                File origDupsDir = new File(backupDir, "orig_dups");
+                for (DuplicateEntry dup : manifest.duplicates) {
+                    File dupBackup = new File(origDupsDir, dup.backupName);
+                    File dupTarget = new File(dup.absPath);
+                    if (dupBackup.isFile()) {
+                        copyFileAtomically(dupBackup, dupTarget);
+                        restoredCount++;
                     }
                 }
             }
@@ -593,6 +648,20 @@ public class ShellBridgeServer {
                     } catch (Throwable ignored) {
                     }
                 }
+            } else if (line.startsWith("dup=")) {
+                String payload = line.substring("dup=".length());
+                String[] parts = payload.split("\\|");
+                if (parts.length >= 3) {
+                    try {
+                        String abs = parts[0];
+                        long size = Long.parseLong(parts[1]);
+                        String bakName = parts[2];
+                        DuplicateEntry dup = new DuplicateEntry(abs, size, bakName);
+                        m.duplicates.add(dup);
+                        m.dupByAbsPath.put(abs, dup);
+                    } catch (Throwable ignored) {
+                    }
+                }
             }
         }
         return m;
@@ -609,7 +678,205 @@ public class ShellBridgeServer {
                     .append(e.patchedSize).append('|')
                     .append(e.hadOriginal).append('\n');
         }
+        for (DuplicateEntry d : m.duplicates) {
+            sb.append("dup=")
+                    .append(d.absPath).append('|')
+                    .append(d.patchedSize).append('|')
+                    .append(d.backupName).append('\n');
+        }
         return sb.toString();
+    }
+
+    // =========================================================================
+    // البحث عن النسخ المكررة والتشخيص السريع عبر Shizuku / Root
+    // =========================================================================
+
+    private static List<File> getGameSearchRoots(File filesDir) {
+        List<File> roots = new ArrayList<>();
+        if (filesDir != null) {
+            File baseDir = filesDir.getParentFile();
+            if (baseDir != null && baseDir.isDirectory()) {
+                roots.add(filesDir);
+                File cacheDir = new File(baseDir, "cache");
+                if (cacheDir.isDirectory()) {
+                    roots.add(cacheDir);
+                }
+            } else {
+                roots.add(filesDir);
+            }
+        }
+        // المسار الداخلي /data/user/0/<pkg> لا يُقرأ إلا بصلاحية Root (UID 0)
+        if (Process.myUid() == 0) {
+            for (String pkg : LauncherConfig.GAME_PACKAGES) {
+                File internal = new File("/data/user/0/" + pkg);
+                if (canReadDir(internal)) {
+                    roots.add(internal);
+                }
+            }
+        }
+        return roots;
+    }
+
+    public static List<File> findDuplicateCopies(File filesDir, String targetName, Set<String> excludeCanonical) {
+        List<File> found = new ArrayList<>();
+        for (File root : getGameSearchRoots(filesDir)) {
+            scanForExactFilename(root, targetName, excludeCanonical, found, 0);
+        }
+        return found;
+    }
+
+    private static void scanForExactFilename(File dir, String targetName, Set<String> excludeCanonical, List<File> out, int depth) {
+        if (dir == null || !dir.isDirectory() || depth > 6) {
+            return;
+        }
+        if (LauncherConfig.BACKUP_DIR_NAME.equals(dir.getName())) {
+            return;
+        }
+        File[] children = dir.listFiles();
+        if (children == null) {
+            return;
+        }
+        for (File child : children) {
+            if (child.isDirectory()) {
+                scanForExactFilename(child, targetName, excludeCanonical, out, depth + 1);
+            } else if (child.isFile() && child.getName().equalsIgnoreCase(targetName)) {
+                String canon;
+                try {
+                    canon = child.getCanonicalPath();
+                } catch (Throwable t) {
+                    canon = child.getAbsolutePath();
+                }
+                if (!excludeCanonical.contains(canon)) {
+                    excludeCanonical.add(canon);
+                    out.add(child);
+                }
+            }
+        }
+    }
+
+    /**
+     * فحص تشخيصي سريع يعرض جميع مجلدات اللعبة وكل النسخ الموجودة لملف اللغة والفهرس وكاش UnityCache.
+     */
+    public static String runDiagnosticScan(File hintDir) {
+        try {
+            grantShellStorageAccess();
+            File filesDir = resolveGameFilesDir(hintDir);
+            File baseDir = filesDir.getParentFile();
+            StringBuilder sb = new StringBuilder();
+
+            sb.append("UID=").append(Process.myUid())
+                    .append(Process.myUid() == 0 ? " (Root)" : (Process.myUid() == 2000 ? " (Shizuku Shell)" : " (App)"))
+                    .append('\n');
+            sb.append("filesDir=").append(filesDir.getAbsolutePath()).append('\n');
+
+            if (baseDir != null && baseDir.isDirectory()) {
+                sb.append("\n[مجلدات Android/data/").append(baseDir.getName()).append("]\n");
+                File[] top = baseDir.listFiles();
+                if (top != null) {
+                    for (File f : top) {
+                        sb.append(" • ").append(f.getName());
+                        if (f.isDirectory()) {
+                            String[] c = f.list();
+                            sb.append("/ (").append(c != null ? c.length : -1).append(" عنصر)");
+                        } else {
+                            sb.append(" (").append(f.length()).append(" B)");
+                        }
+                        sb.append('\n');
+                    }
+                }
+            }
+
+            sb.append("\n[المجلدات الفرعية داخل files/]\n");
+            File[] fChildren = filesDir.listFiles();
+            if (fChildren != null) {
+                for (File f : fChildren) {
+                    if (f.isDirectory()) {
+                        String[] c = f.list();
+                        sb.append(" • files/").append(f.getName()).append("/ (").append(c != null ? c.length : -1).append(" عنصر)\n");
+                    }
+                }
+            }
+
+            sb.append("\n[نسخ ملف اللغة 5efd73ed...]\n");
+            List<File> langCopies = findDuplicateCopies(filesDir, LauncherConfig.LANG_ENG_BUNDLE_HASH, new HashSet<>());
+            if (langCopies.isEmpty()) {
+                sb.append(" • لم يُعثر على أي نسخة!\n");
+            } else {
+                for (File f : langCopies) {
+                    sb.append(" • ").append(f.getAbsolutePath()).append(" (").append(f.length()).append(" B)\n");
+                }
+            }
+
+            sb.append("\n[نسخ فهرس الكتالوج 88856e7c...]\n");
+            List<File> catCopies = findDuplicateCopies(filesDir, LauncherConfig.CATALOG_BUNDLE_HASH, new HashSet<>());
+            if (catCopies.isEmpty()) {
+                sb.append(" • لم يُعثر على أي نسخة!\n");
+            } else {
+                for (File f : catCopies) {
+                    sb.append(" • ").append(f.getAbsolutePath()).append(" (").append(f.length()).append(" B)\n");
+                }
+            }
+
+            sb.append("\n[فحص UnityCache و cache/]\n");
+            List<String> cacheFindings = new ArrayList<>();
+            if (baseDir != null) {
+                scanCacheIndicators(new File(baseDir, "cache"), cacheFindings, 0);
+                scanCacheIndicators(new File(filesDir, "UnityCache"), cacheFindings, 0);
+            }
+            if (cacheFindings.isEmpty()) {
+                sb.append(" • لا توجد ملفات UnityCache / __data بحجم ~1.4 م.ب\n");
+            } else {
+                for (String s : cacheFindings) {
+                    sb.append(" • ").append(s).append('\n');
+                }
+            }
+
+            File internalDir = new File("/data/user/0/" + LauncherConfig.GAME_PACKAGE);
+            sb.append("\n[المسار الداخلي /data/user/0/]\n");
+            if (canReadDir(internalDir)) {
+                sb.append(" • متاح للقراءة (Root)\n");
+            } else {
+                sb.append(" • محمي بواسطة أندرويد (يحتاج Root — Shizuku UID 2000 لا يصل إليه)\n");
+            }
+
+            File manifestFile = new File(new File(filesDir, LauncherConfig.BACKUP_DIR_NAME), LauncherConfig.BACKUP_MANIFEST_FILE);
+            if (manifestFile.isFile()) {
+                sb.append("\n[سجل النسخ الاحتياطي manifest.txt]\n");
+                sb.append(readText(manifestFile).trim()).append('\n');
+            }
+
+            String escaped = sb.toString().replace("\r", "").replace("\n", "\\n");
+            return "OK|" + escaped;
+        } catch (Throwable t) {
+            return "ERR|" + t.getClass().getSimpleName() + ": " + t.getMessage();
+        }
+    }
+
+    private static void scanCacheIndicators(File dir, List<String> out, int depth) {
+        if (dir == null || !dir.isDirectory() || depth > 5 || out.size() >= 25) {
+            return;
+        }
+        File[] children = dir.listFiles();
+        if (children == null) {
+            return;
+        }
+        for (File child : children) {
+            if (out.size() >= 25) {
+                return;
+            }
+            if (child.isDirectory()) {
+                String n = child.getName();
+                if (n.equalsIgnoreCase("UnityCache") || n.equalsIgnoreCase("Shared") || n.contains("740e8431")) {
+                    out.add("DIR: " + child.getAbsolutePath());
+                }
+                scanCacheIndicators(child, out, depth + 1);
+            } else if (child.isFile()) {
+                long len = child.length();
+                if ("__data".equals(child.getName()) || (len >= 1350000L && len <= 1600000L)) {
+                    out.add("FILE: " + child.getAbsolutePath() + " (" + len + " B)");
+                }
+            }
+        }
     }
 
     public static void collectFilesRecursively(File dir, List<File> out) {
