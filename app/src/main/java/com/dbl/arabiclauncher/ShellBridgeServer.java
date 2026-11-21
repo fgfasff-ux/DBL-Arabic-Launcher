@@ -156,11 +156,13 @@ public class ShellBridgeServer {
         storageRoots.add("/sdcard");
         storageRoots.add("/mnt/sdcard");
 
-        // 1) أولوية قصوى للمجلد الذي يحتوي مجلد أصول DBL الحقيقي (files/as) وقابل للقراءة
+        // 1) أولوية قصوى للمجلد الذي يحتوي مجلد أصول DBL الحقيقي (streamingassetbundles أو as) وقابل للقراءة
         for (String root : storageRoots) {
             for (String pkg : LauncherConfig.GAME_PACKAGES) {
                 File f = new File(root + "/Android/data/" + pkg + "/files");
-                if (new File(f, "as").isDirectory() && canReadDir(f)) {
+                if ((new File(f, LauncherConfig.DEFAULT_BUNDLES_SUBDIR).isDirectory()
+                        || new File(f, LauncherConfig.CATALOG_SUBDIR).isDirectory())
+                        && canReadDir(f)) {
                     return f;
                 }
             }
@@ -290,20 +292,37 @@ public class ShellBridgeServer {
         if (filesDir == null || !filesDir.isDirectory()) {
             return false;
         }
-        if (LauncherConfig.FIRST_LAUNCH_CHECK_PATHS.length == 0) {
+        if (LauncherConfig.FIRST_LAUNCH_ANY_OF_PATHS.length == 0) {
             String[] children = filesDir.list();
             return children != null && children.length > 0;
         }
-        for (String rel : LauncherConfig.FIRST_LAUNCH_CHECK_PATHS) {
+        for (String rel : LauncherConfig.FIRST_LAUNCH_ANY_OF_PATHS) {
             String norm = LauncherConfig.normalizeSubpath(rel);
-            if (norm.isEmpty()) {
-                continue;
-            }
-            if (!new File(filesDir, norm).exists()) {
-                return false;
+            if (!norm.isEmpty() && new File(filesDir, norm).exists()) {
+                return true;
             }
         }
-        return true;
+        return false;
+    }
+
+    /**
+     * يحدد المسار النسبي النهائي للملف داخل files/:
+     * - إذا كان الملف داخل مجلد في الـ ZIP (مثل streamingassetbundles/... أو as/...) يحافظ عليه.
+     * - إذا كان الملف في جذر الـ ZIP مباشرة وهو هاش حزمة من 40 خانة (بدون مجلد)، يوجّهه تلقائياً
+     *   إلى streamingassetbundles/ (أو as/ إذا كان هو فهرس AssetBundleCatalog أو موجوداً في as/).
+     */
+    private static String resolveTargetRelativePath(File filesDir, String normSubpath, String relInStage) {
+        if (!normSubpath.isEmpty()) {
+            return normSubpath + "/" + relInStage;
+        }
+        if (!relInStage.contains("/") && LauncherConfig.isSha1BundleFilename(relInStage)) {
+            if (LauncherConfig.CATALOG_BUNDLE_HASH.equalsIgnoreCase(relInStage)
+                    || new File(filesDir, LauncherConfig.CATALOG_SUBDIR + "/" + relInStage).isFile()) {
+                return LauncherConfig.CATALOG_SUBDIR + "/" + relInStage;
+            }
+            return LauncherConfig.DEFAULT_BUNDLES_SUBDIR + "/" + relInStage;
+        }
+        return relInStage;
     }
 
     /**
@@ -400,7 +419,7 @@ public class ShellBridgeServer {
                     throw new SecurityException("ملف خارج مجلد التجهيز: " + canonical);
                 }
                 String rel = canonical.substring(stageBase.length()).replace('\\', '/');
-                String fullRel = normSubpath.isEmpty() ? rel : (normSubpath + "/" + rel);
+                String fullRel = resolveTargetRelativePath(filesDir, normSubpath, rel);
                 newRelPaths.add(fullRel);
                 orderedRelPaths.add(fullRel);
             }

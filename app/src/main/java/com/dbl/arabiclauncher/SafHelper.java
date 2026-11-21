@@ -86,7 +86,8 @@ public final class SafHelper {
             }
             for (String pkg : LauncherConfig.GAME_PACKAGES) {
                 String candidate = prefix + "Android/data/" + pkg + "/files";
-                if (docExists(context, treeUri, candidate + "/as")) {
+                if (docExists(context, treeUri, candidate + "/" + LauncherConfig.DEFAULT_BUNDLES_SUBDIR)
+                        || docExists(context, treeUri, candidate + "/" + LauncherConfig.CATALOG_SUBDIR)) {
                     return candidate;
                 }
             }
@@ -275,16 +276,36 @@ public final class SafHelper {
         if (!docExists(context, treeUri, filesDocId)) {
             return false;
         }
-        if (LauncherConfig.FIRST_LAUNCH_CHECK_PATHS.length == 0) {
+        if (LauncherConfig.FIRST_LAUNCH_ANY_OF_PATHS.length == 0) {
             return hasAnyChildren(context, treeUri, filesDocId);
         }
-        for (String rel : LauncherConfig.FIRST_LAUNCH_CHECK_PATHS) {
+        for (String rel : LauncherConfig.FIRST_LAUNCH_ANY_OF_PATHS) {
             String norm = LauncherConfig.normalizeSubpath(rel);
-            if (!norm.isEmpty() && !docExists(context, treeUri, filesDocId + "/" + norm)) {
-                return false;
+            if (!norm.isEmpty() && docExists(context, treeUri, filesDocId + "/" + norm)) {
+                return true;
             }
         }
-        return true;
+        return false;
+    }
+
+    private static String resolveTargetRelativePathSaf(
+            Context context,
+            Uri treeUri,
+            String filesDocId,
+            String normSubpath,
+            String relInStage
+    ) {
+        if (!normSubpath.isEmpty()) {
+            return normSubpath + "/" + relInStage;
+        }
+        if (!relInStage.contains("/") && LauncherConfig.isSha1BundleFilename(relInStage)) {
+            if (LauncherConfig.CATALOG_BUNDLE_HASH.equalsIgnoreCase(relInStage)
+                    || docExists(context, treeUri, filesDocId + "/" + LauncherConfig.CATALOG_SUBDIR + "/" + relInStage)) {
+                return LauncherConfig.CATALOG_SUBDIR + "/" + relInStage;
+            }
+            return LauncherConfig.DEFAULT_BUNDLES_SUBDIR + "/" + relInStage;
+        }
+        return relInStage;
     }
 
     public static String getStatus(Context context, Uri treeUri) {
@@ -364,7 +385,7 @@ public final class SafHelper {
                     throw new SecurityException("ملف خارج مجلد التجهيز: " + canonical);
                 }
                 String rel = canonical.substring(stageBase.length()).replace('\\', '/');
-                String fullRel = normSubpath.isEmpty() ? rel : (normSubpath + "/" + rel);
+                String fullRel = resolveTargetRelativePathSaf(context, treeUri, filesDocId, normSubpath, rel);
                 newRelPaths.add(fullRel);
                 orderedRelPaths.add(fullRel);
             }

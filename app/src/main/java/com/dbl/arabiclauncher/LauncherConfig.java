@@ -14,7 +14,7 @@ public final class LauncherConfig {
     // =========================================================================
     // 1) معلومات التطبيق وهويته
     // =========================================================================
-    public static final String APP_VERSION = "1.0.1";
+    public static final String APP_VERSION = "1.0.2";
     public static final String APP_TITLE = "Dragon Ball Legends — التعريب العربي";
     public static final String APP_SUBTITLE = "مثبّت ذكي مع نسخ احتياطي واستعادة أصلية (Shizuku & SAF)";
     public static final String BADGE_LABEL = "مشروع تعريب DBL";
@@ -35,28 +35,38 @@ public final class LauncherConfig {
 
     /**
      * المسار الفرعي داخل مجلد /Android/data/<GAME_PACKAGE>/files/
-     * - مضبوط على "" (جذر مجلد files/) ليتطابق مباشرة مع بنية ملفات Dragon Ball Legends:
-     *   • ملفات البيانات النصية/الهاشات (32 خانة بدون امتداد) تُنسخ مباشرة داخل files/
-     *   • ملفات الخطوط والأصول (40 خانة بدون امتداد) تُنسخ داخل files/as/
-     *   • أي مجلدات إضافية مثل Scenario/ تُنسخ داخل files/Scenario/
-     * - ملاحظة: يمكن أيضاً تجاوز هذا المسار عن بُعد عبر حقل "target_subpath" داخل manifest.json.
+     * - مضبوط على "" (جذر مجلد files/) ليتطابق مع البنية الكاملة للعبة Dragon Ball Legends:
+     *   • حزم الأصول واللغة (40 خانة SHA-1) تُنسخ داخل files/streamingassetbundles/
+     *   • فهرس الحزم AssetBundleCatalog (40 خانة SHA-1) يُنسخ داخل files/as/
+     *   • إذا احتوى الـ ZIP على ملف حزمة (40 خانة) مباشرة بدون مجلد، يوجّهه التطبيق تلقائياً إلى
+     *     streamingassetbundles/ (أو as/ إذا كان موجوداً هناك مثل الفهرس).
      */
     public static final String GAME_TARGET_SUBPATH = "";
 
+    /** المجلد الافتراضي لحزم الأصول واللغة في Dragon Ball Legends */
+    public static final String DEFAULT_BUNDLES_SUBDIR = "streamingassetbundles";
+
+    /** المجلد الخاص بفهرس AssetBundleCatalog */
+    public static final String CATALOG_SUBDIR = "as";
+
+    /** اسم هاش فهرس AssetBundleCatalog الثابت */
+    public static final String CATALOG_BUNDLE_HASH = "88856e7ceebe5d6d518bd89010cb17f16a36a5ab";
+
     /**
      * مسارات للتحقق من أن لعبة Dragon Ball Legends تم تشغيلها وتنزيل بياناتها الأولية
-     * (نسبةً إلى /Android/data/com.bandainamcoent.dblegends_ww/files/).
+     * (يكفي وجود أحدها داخل files/).
      */
-    public static final String[] FIRST_LAUNCH_CHECK_PATHS = {
+    public static final String[] FIRST_LAUNCH_ANY_OF_PATHS = {
+            "streamingassetbundles",
             "as"
     };
 
     /**
      * أسماء المجلدات الفرعية الحقيقية داخل مجلد files/ الخاص بلعبة Dragon Ball Legends.
-     * تُستخدم لتمييز مجلدات اللعبة الحقيقية عن أي مجلد غلاف (مثل "files" أو "Language files DB")
-     * قد يضعه المطور بالخطأ داخل ملف الـ ZIP.
+     * تُستخدم لتمييز مجلدات اللعبة الحقيقية عن أي مجلد غلاف داخل ملف الـ ZIP.
      */
     public static final String[] KNOWN_GAME_SUBDIRS = {
+            "streamingassetbundles",
             "as",
             "Scenario",
             "il2cpp",
@@ -65,6 +75,21 @@ public final class LauncherConfig {
             "assets",
             "cache"
     };
+
+    /** يتحقق هل اسم الملف عبارة عن هاش SHA-1 من 40 خانة (حزمة UnityFS في DBL) */
+    public static boolean isSha1BundleFilename(String name) {
+        if (name == null || name.length() != 40) {
+            return false;
+        }
+        for (int i = 0; i < 40; i++) {
+            char c = name.charAt(i);
+            boolean hex = (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F');
+            if (!hex) {
+                return false;
+            }
+        }
+        return true;
+    }
 
     /** اسم مجلد النسخ الاحتياطي داخل files/ لحفظ الملفات الأصلية قبل الاستبدال */
     public static final String BACKUP_DIR_NAME = ".dbl_arabic_backup";
