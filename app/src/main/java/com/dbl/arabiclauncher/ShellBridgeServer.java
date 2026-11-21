@@ -845,11 +845,92 @@ public class ShellBridgeServer {
                 sb.append(readText(manifestFile).trim()).append('\n');
             }
 
+            // فحص محتويات hc و Scenario و Unity و cache
+            sb.append("\n[محتويات hc / Scenario / Unity / cache]\n");
+            String[] extraDirs = {"hc", "Scenario", "Unity"};
+            for (String d : extraDirs) {
+                File sub = new File(filesDir, d);
+                if (sub.isDirectory()) {
+                    File[] list = sub.listFiles();
+                    if (list != null) {
+                        for (File item : list) {
+                            sb.append(" • files/").append(d).append('/').append(item.getName())
+                                    .append(item.isDirectory() ? "/" : (" (" + item.length() + " B)")).append('\n');
+                        }
+                    }
+                }
+            }
+            if (baseDir != null) {
+                File cDir = new File(baseDir, "cache");
+                if (cDir.isDirectory()) {
+                    File[] list = cDir.listFiles();
+                    if (list != null) {
+                        for (File item : list) {
+                            sb.append(" • cache/").append(item.getName())
+                                    .append(item.isDirectory() ? "/" : (" (" + item.length() + " B)")).append('\n');
+                        }
+                    }
+                }
+            }
+
+            // البحث عن أي ملفات أخرى في streamingassetbundles بحجم مشابه لملف اللغة (1.35 - 1.65 م.ب)
+            sb.append("\n[ملفات streamingassetbundles بحجم 1.35 - 1.65 م.ب]\n");
+            File sabDir = new File(filesDir, LauncherConfig.DEFAULT_BUNDLES_SUBDIR);
+            if (sabDir.isDirectory()) {
+                File[] sabFiles = sabDir.listFiles();
+                int nearCount = 0;
+                if (sabFiles != null) {
+                    for (File sf : sabFiles) {
+                        if (sf.isFile()) {
+                            long l = sf.length();
+                            if (l >= 1350000L && l <= 1650000L) {
+                                sb.append(" • ").append(sf.getName()).append(" (").append(l).append(" B)\n");
+                                nearCount++;
+                                if (nearCount >= 20) {
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                }
+                if (nearCount == 0) {
+                    sb.append(" • لا يوجد\n");
+                }
+            }
+
+            // فحص مسارات APK اللعبة (Split APKs / Asset Packs)
+            sb.append("\n[مسارات APK اللعبة]\n");
+            String pmOut = runShellCommand("pm path " + LauncherConfig.GAME_PACKAGE, 15);
+            sb.append(pmOut.isEmpty() ? " • غير متاح\n" : pmOut);
+
+            // قراءة آخر أسطر logcat الخاصة بـ Unity (يكشف فوراً أي خطأ CRC أو مسار التحميل الفعلي)
+            sb.append("\n[آخر سجلات Unity في logcat]\n");
+            String logOut = runShellCommand("logcat -d -s Unity:V | tail -n 35", 35);
+            sb.append(logOut.isEmpty() ? " • لا توجد سجلات Unity حالياً (افتح اللعبة ثم ارجع للفحص)\n" : logOut);
+
             String escaped = sb.toString().replace("\r", "").replace("\n", "\\n");
             return "OK|" + escaped;
         } catch (Throwable t) {
             return "ERR|" + t.getClass().getSimpleName() + ": " + t.getMessage();
         }
+    }
+
+    private static String runShellCommand(String cmd, int maxLines) {
+        StringBuilder out = new StringBuilder();
+        try {
+            Process p = Runtime.getRuntime().exec(new String[]{"sh", "-c", cmd});
+            try (BufferedReader br = new BufferedReader(new InputStreamReader(p.getInputStream(), StandardCharsets.UTF_8))) {
+                String line;
+                int count = 0;
+                while ((line = br.readLine()) != null && count < maxLines) {
+                    out.append(" • ").append(line).append('\n');
+                    count++;
+                }
+            }
+            p.waitFor();
+        } catch (Throwable ignored) {
+        }
+        return out.toString();
     }
 
     private static void scanCacheIndicators(File dir, List<String> out, int depth) {

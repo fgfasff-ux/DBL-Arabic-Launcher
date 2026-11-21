@@ -14,7 +14,7 @@ public final class LauncherConfig {
     // =========================================================================
     // 1) معلومات التطبيق وهويته
     // =========================================================================
-    public static final String APP_VERSION = "1.0.3";
+    public static final String APP_VERSION = "1.0.4";
     public static final String APP_TITLE = "Dragon Ball Legends — التعريب العربي";
     public static final String APP_SUBTITLE = "مثبّت ذكي مع نسخ احتياطي واستعادة أصلية (Shizuku & SAF)";
     public static final String BADGE_LABEL = "مشروع تعريب DBL";
@@ -131,7 +131,7 @@ public final class LauncherConfig {
     // 4) إعدادات جسر Shizuku المحلي
     // =========================================================================
     public static final int BRIDGE_PORT = 38912;
-    public static final String BRIDGE_REV = "r2";
+    public static final String BRIDGE_REV = "r3";
     public static final String SHIZUKU_PACKAGE = "moe.shizuku.privileged.api";
 
     // =========================================================================
