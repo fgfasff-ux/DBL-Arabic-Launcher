@@ -918,7 +918,7 @@ public class ShellBridgeServer {
     private static String runShellCommand(String cmd, int maxLines) {
         StringBuilder out = new StringBuilder();
         try {
-            Process p = Runtime.getRuntime().exec(new String[]{"sh", "-c", cmd});
+            java.lang.Process p = Runtime.getRuntime().exec(new String[]{"sh", "-c", cmd});
             try (BufferedReader br = new BufferedReader(new InputStreamReader(p.getInputStream(), StandardCharsets.UTF_8))) {
                 String line;
                 int count = 0;
